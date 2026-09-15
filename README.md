@@ -154,8 +154,8 @@ The integration test exercises the full loop — question generation, answer sub
 | Name | Role |
 |---|---|
 | Kshitij | Part C — Agent Orchestration |
-| [Teammate] | Part A — Voice & RAG Ingestion |
-| [Teammate] | Part B — Adaptive Scoring |
+| Tejas Raghupati Sairam | Part A — Voice & RAG Ingestion |
+| Raghav Biyani | Part B — Adaptive Scoring |
 
 ## Roadmap
 
