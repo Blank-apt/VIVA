@@ -1,19 +1,26 @@
 """
-Thin OpenAI-compatible client wrapper. Works against either provider
-configured in config.py (Groq for free dev, Moonshot for the paid
-hackathon run) — both expose an OpenAI-shaped chat completions endpoint,
-so this file never needs to know which one it's talking to.
+Thin OpenAI-compatible client wrapper.
+
+Works against either provider configured in config.py
+(Groq for free dev, Mistral for free dev, Moonshot for the
+paid hackathon run).
+
+All providers expose an OpenAI-compatible chat completions endpoint,
+so this file does not need to know which provider it is talking to.
 
 Handles:
-  - Structured Output (response_format: json_schema) so responses parse
-    directly into Pydantic models instead of hand-rolled JSON parsing
-  - Retries on transient failures / malformed JSON
-  - thinking / prompt_cache_key / reasoning_effort params only sent when
-    the active provider actually supports them (see config.py)
+    - Structured Output (response_format: json_schema)
+    - Pydantic validation
+    - Retries on transient failures / malformed JSON
+    - Exponential backoff for rate-limit (429) errors
+    - thinking / prompt_cache_key / reasoning_effort params only sent
+      when the active provider actually supports them
 """
+
 from __future__ import annotations
 
 import json
+import time
 from typing import Type, TypeVar
 
 from openai import OpenAI
@@ -21,47 +28,74 @@ from pydantic import BaseModel, ValidationError
 
 import config
 
+
 T = TypeVar("T", bound=BaseModel)
 
-_client = OpenAI(api_key=config.LLM_API_KEY, base_url=config.LLM_BASE_URL)
 
+# ---------------------------------------------------------------------------
+# OpenAI-compatible client
+# ---------------------------------------------------------------------------
+
+_client = OpenAI(
+    api_key=config.LLM_API_KEY,
+    base_url=config.LLM_BASE_URL,
+)
+
+
+# ---------------------------------------------------------------------------
+# Strict JSON schema helper
+# ---------------------------------------------------------------------------
 
 def _to_strict_json_schema(model: Type[BaseModel]) -> dict:
     """
-    Groq/OpenAI-style strict structured output requires, on EVERY object
-    in the schema (including nested ones under $defs, reached via $ref):
-      - "additionalProperties": false
-      - every property listed in "required" — even ones with a Python
-        default. Pydantic's model_json_schema() does neither by default,
-        which is exactly what produced the 400 error ("additionalProperties
-        must be set on every object") the first time this ran against
-        Groq's strict validator.
+    Convert a Pydantic model's JSON schema into a strict schema.
 
-    Forcing every property into "required" doesn't change the Python-side
-    contract: fields that had a default (e.g. checklist=[]) just mean the
-    model must now always include that key explicitly (e.g. an empty
-    list), which our code already handles fine either way.
+    Strict structured output requires every object to have:
+
+        - additionalProperties: false
+        - every property listed in required
+
+    This also recursively handles nested objects and schemas
+    inside $defs.
     """
+
     schema = model.model_json_schema()
 
     def _walk(node: object) -> None:
         if isinstance(node, dict):
+
             if node.get("type") == "object" and "properties" in node:
                 node["additionalProperties"] = False
                 node["required"] = list(node["properties"].keys())
+
             for value in node.values():
                 _walk(value)
+
         elif isinstance(node, list):
             for item in node:
                 _walk(item)
 
     _walk(schema)
+
     return schema
 
 
-class LLMCallError(RuntimeError):
-    """Raised when the LLM fails to return a schema-valid response after retries."""
+# ---------------------------------------------------------------------------
+# Custom exception
+# ---------------------------------------------------------------------------
 
+class LLMCallError(RuntimeError):
+    """
+    Raised when the LLM fails to return a schema-valid response
+    after all retry attempts.
+    """
+
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Structured LLM call
+# ---------------------------------------------------------------------------
 
 def call_structured(
     *,
@@ -75,20 +109,37 @@ def call_structured(
     max_retries: int = 2,
 ) -> T:
     """
-    Calls the configured LLM with Structured Output constrained to
-    response_model's JSON schema, and returns a validated instance of
-    response_model.
+    Call the configured LLM using structured JSON output.
 
-    Raises LLMCallError if every attempt fails (network error, or the
-    model returns something that doesn't parse/validate).
+    The response is parsed and validated against the supplied
+    Pydantic model.
+
+    Retries are performed for:
+        - malformed JSON
+        - Pydantic validation errors
+        - transient API/network failures
+        - rate-limit (429) responses
+
+    Rate-limit retries use exponential backoff.
     """
+
     schema = _to_strict_json_schema(response_model)
+
+    # -----------------------------------------------------------------------
+    # Build request
+    # -----------------------------------------------------------------------
 
     request_kwargs: dict = dict(
         model=model,
         messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
+            {
+                "role": "user",
+                "content": user_prompt,
+            },
         ],
         response_format={
             "type": "json_schema",
@@ -100,6 +151,10 @@ def call_structured(
         },
     )
 
+    # -----------------------------------------------------------------------
+    # Optional provider-specific parameters
+    # -----------------------------------------------------------------------
+
     if prompt_cache_key and config.SUPPORTS_EXPLICIT_CACHE_KEY:
         request_kwargs["prompt_cache_key"] = prompt_cache_key
 
@@ -110,24 +165,101 @@ def call_structured(
 
     if config.SUPPORTS_REASONING_EFFORT:
         key = "enabled" if thinking_enabled else "disabled"
-        request_kwargs["reasoning_effort"] = config.LLM_REASONING_EFFORT_MAP[key]
+
+        request_kwargs["reasoning_effort"] = (
+            config.LLM_REASONING_EFFORT_MAP[key]
+        )
+
+    # -----------------------------------------------------------------------
+    # Retry loop
+    # -----------------------------------------------------------------------
 
     last_error: Exception | None = None
-    for _ in range(max_retries + 1):
+
+    for attempt in range(max_retries + 1):
+
         try:
-            response = _client.chat.completions.create(**request_kwargs)
+            response = _client.chat.completions.create(
+                **request_kwargs
+            )
+
             raw_content = response.choices[0].message.content
+
+            if not raw_content:
+                raise LLMCallError(
+                    "LLM returned an empty response."
+                )
+
             parsed = json.loads(raw_content)
+
             return response_model.model_validate(parsed)
+
+        # -------------------------------------------------------------------
+        # JSON / Pydantic errors
+        # -------------------------------------------------------------------
+
         except (json.JSONDecodeError, ValidationError) as exc:
             last_error = exc
-            continue
-        except Exception as exc:  # network/API errors etc.
+
+            # These errors aren't necessarily fixed by immediately retrying,
+            # but retrying can help if the model occasionally produces bad
+            # output.
+            if attempt < max_retries:
+                continue
+
+        # -------------------------------------------------------------------
+        # API / network / rate-limit errors
+        # -------------------------------------------------------------------
+
+        except Exception as exc:
             last_error = exc
-            continue
+
+            error_string = str(exc).lower()
+
+            # ---------------------------------------------------------------
+            # Rate limit
+            # ---------------------------------------------------------------
+
+            if "429" in error_string or "rate limit" in error_string:
+
+                if attempt < max_retries:
+
+                    # Exponential backoff:
+                    #
+                    # attempt 0 -> 5 seconds
+                    # attempt 1 -> 10 seconds
+                    # attempt 2 -> 20 seconds
+                    #
+                    wait_time = 5 * (2 ** attempt)
+
+                    print(
+                        f"[llm] Rate limit reached. "
+                        f"Retrying in {wait_time}s "
+                        f"(attempt {attempt + 1}/{max_retries + 1})..."
+                    )
+
+                    time.sleep(wait_time)
+
+                    continue
+
+            # ---------------------------------------------------------------
+            # Other API/network errors
+            # ---------------------------------------------------------------
+
+            if attempt < max_retries:
+
+                # Short delay for transient errors.
+                time.sleep(1)
+
+                continue
+
+    # -----------------------------------------------------------------------
+    # All attempts failed
+    # -----------------------------------------------------------------------
 
     raise LLMCallError(
         f"LLM call failed after {max_retries + 1} attempts for schema "
-        f"'{schema_name}' (provider={config.LLM_PROVIDER}, model={model}): "
+        f"'{schema_name}' "
+        f"(provider={config.LLM_PROVIDER}, model={model}): "
         f"{last_error}"
     )

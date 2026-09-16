@@ -50,7 +50,7 @@ _PROVIDER_DEFAULTS = {
     "mistral": {
         "base_url": "https://api.mistral.ai/v1",
         "api_key_env": "MISTRAL_API_KEY",
-        "model": "mistral-large-latest",
+        "model": "mistral-medium-latest",
         # mistral-large-latest actively REJECTS reasoning_effort with a
         # 400 ("reasoning_effort is not enabled for this model") — it's
         # apparently only accepted by specific Mistral models (small,

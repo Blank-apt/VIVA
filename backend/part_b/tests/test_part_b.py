@@ -104,6 +104,26 @@ def test_seeding_is_idempotent(db_path):
     assert before == after
 
 
+def test_seed_topics_covers_expected_categories(db_path):
+    from part_b.seed import INITIAL_TOPICS
+
+    conn = get_connection(db_path)
+    rows = conn.execute("SELECT DISTINCT category FROM topics").fetchall()
+    conn.close()
+
+    categories = {row["category"] for row in rows}
+    expected_categories = {name for _, name in INITIAL_TOPICS}
+    assert categories == expected_categories
+    assert {"DSA", "OS", "DBMS", "Networking", "OOP", "System Design"} <= categories
+
+
+def test_seed_topics_no_duplicate_names_in_source_list():
+    from part_b.seed import INITIAL_TOPICS
+
+    names = [name for name, _ in INITIAL_TOPICS]
+    assert len(names) == len(set(names)), "INITIAL_TOPICS contains duplicate topic names"
+
+
 # ---------------------------------------------------------------------------
 # EMA tests
 # ---------------------------------------------------------------------------

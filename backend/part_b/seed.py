@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .db import DEFAULT_DB_PATH, get_connection
 
-# (name, category) — minimum topic set from spec section 17.
+# (name, category) — starter topic set, covering common CS interview areas.
 INITIAL_TOPICS: list[tuple[str, str]] = [
     # DSA
     ("Arrays", "DSA"),
@@ -26,6 +26,14 @@ INITIAL_TOPICS: list[tuple[str, str]] = [
     ("Greedy", "DSA"),
     ("Recursion", "DSA"),
     ("Hashing", "DSA"),
+    ("Heaps", "DSA"),
+    ("Tries", "DSA"),
+    ("Sliding Window", "DSA"),
+    ("Two Pointers", "DSA"),
+    ("Backtracking", "DSA"),
+    ("Bit Manipulation", "DSA"),
+    ("Sorting Algorithms", "DSA"),
+    ("Union-Find", "DSA"),
     # OS
     ("Processes", "OS"),
     ("Threads", "OS"),
@@ -33,6 +41,10 @@ INITIAL_TOPICS: list[tuple[str, str]] = [
     ("Deadlocks", "OS"),
     ("Memory Management", "OS"),
     ("Virtual Memory", "OS"),
+    ("Paging and Segmentation", "OS"),
+    ("Semaphores and Mutexes", "OS"),
+    ("File Systems", "OS"),
+    ("Inter-Process Communication", "OS"),
     # DBMS
     ("SQL", "DBMS"),
     ("Joins", "DBMS"),
@@ -40,6 +52,28 @@ INITIAL_TOPICS: list[tuple[str, str]] = [
     ("Transactions", "DBMS"),
     ("Indexing", "DBMS"),
     ("ACID", "DBMS"),
+    ("Concurrency Control", "DBMS"),
+    ("Query Optimization", "DBMS"),
+    ("Views and Stored Procedures", "DBMS"),
+    ("NoSQL Databases", "DBMS"),
+    ("Database Sharding", "DBMS"),
+    # Networking
+    ("TCP/IP Basics", "Networking"),
+    ("HTTP and HTTPS", "Networking"),
+    ("DNS", "Networking"),
+    ("REST APIs", "Networking"),
+    ("Load Balancing", "Networking"),
+    # OOP
+    ("OOP Principles", "OOP"),
+    ("Design Patterns", "OOP"),
+    ("SOLID Principles", "OOP"),
+    ("UML Basics", "OOP"),
+    # System Design Basics
+    ("Caching", "System Design"),
+    ("Scalability Basics", "System Design"),
+    ("CAP Theorem", "System Design"),
+    ("Rate Limiting", "System Design"),
+    ("Message Queues", "System Design"),
 ]
 
 

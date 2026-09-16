@@ -155,3 +155,46 @@ def get_weakest_topics(
         conn.close()
 
     return [row["name"] for row in rows]
+
+
+def get_mastery_overview(
+    mode: str,
+    db_path: str | Path = DEFAULT_DB_PATH,
+) -> list[dict]:
+    """
+    Return every topic's current mastery for `mode`, sorted weakest first —
+    the full picture behind get_weakest_topics(), for UI dashboards that
+    want to show all topics (e.g. a bar chart), not just the top-n weakest.
+
+    Each item: {"topic": str, "score": float, "difficulty": str}.
+    Unseen topics use the default mastery (0.5), same as get_weakest_topics.
+    """
+    validate_mode(mode)
+
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT t.name AS name,
+                   COALESCE(tm.score, ?) AS effective_score
+            FROM topics t
+            LEFT JOIN topic_mastery tm
+                ON tm.topic_id = t.id AND tm.mode = ?
+            ORDER BY effective_score ASC, t.name ASC
+            """,
+            (DEFAULT_MASTERY, mode),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    overview = []
+    for row in rows:
+        score = row["effective_score"]
+        if score < DIFFICULTY_LOW_THRESHOLD:
+            difficulty = DIFFICULTY_FOUNDATIONAL
+        elif score > DIFFICULTY_HIGH_THRESHOLD:
+            difficulty = DIFFICULTY_EDGE_CASES
+        else:
+            difficulty = DIFFICULTY_MEDIUM
+        overview.append({"topic": row["name"], "score": score, "difficulty": difficulty})
+    return overview

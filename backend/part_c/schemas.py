@@ -97,7 +97,8 @@ class NextQuestionRequest(BaseModel):
 class SubmitAnswerRequest(BaseModel):
     session_id: str
     question_id: str
-    audio_base64: str  # base64-encoded audio; decoded to bytes before transcribe()
+    audio_base64: Optional[str] = None  # base64-encoded audio; decoded to bytes before transcribe()
+    transcript_override: Optional[str] = None  # if set, skips transcribe() entirely (e.g. typed answers from a text-only frontend)
 
 
 class SubmitAnswerResponse(BaseModel):
@@ -114,3 +115,28 @@ class EndSessionRequest(BaseModel):
 class EndSessionResponse(BaseModel):
     session_id: int  # Part B's integer session PK, not the frontend's string id
     ended: bool
+
+
+class MasteryTopic(BaseModel):
+    topic: str
+    score: float
+    difficulty: str
+
+
+class SessionQAItem(BaseModel):
+    id: int
+    question: str
+    transcript: Optional[str] = None
+    score: Optional[float] = None
+    topic: str
+    mode: str
+    difficulty: Optional[str] = None
+    created_at: str
+
+
+class SessionHistoryResponse(BaseModel):
+    session_id: int
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    summary: Optional[str] = None
+    qa: list[SessionQAItem] = Field(default_factory=list)

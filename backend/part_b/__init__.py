@@ -8,7 +8,7 @@ the "public interface" from the original spec is re-exported.
 
 from .db import init_db
 from .seed import seed_topics
-from .mastery import update_mastery, get_next_difficulty, get_weakest_topics
+from .mastery import update_mastery, get_next_difficulty, get_weakest_topics, get_mastery_overview
 from .sessions import (
     save_session,
     start_session,
@@ -25,6 +25,7 @@ __all__ = [
     "update_mastery",
     "get_next_difficulty",
     "get_weakest_topics",
+    "get_mastery_overview",
     "save_session",
     "start_session",
     "add_qa",

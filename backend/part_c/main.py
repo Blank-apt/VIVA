@@ -17,6 +17,7 @@ import _pathfix  # noqa: F401  (must run before part_a/part_b imports below)
 import base64
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from evaluator import evaluate
 from interviewer import generate_next_question
@@ -24,7 +25,10 @@ from schemas import (
     EndSessionRequest,
     EndSessionResponse,
     GeneratedQuestion,
+    MasteryTopic,
     NextQuestionRequest,
+    SessionHistoryResponse,
+    SessionQAItem,
     SubmitAnswerRequest,
     SubmitAnswerResponse,
 )
@@ -51,8 +55,11 @@ try:
         seed_topics,
         update_mastery,
         get_next_difficulty,
+        get_mastery_overview,
         add_qa,
         end_session as end_session_in_db,
+        get_session,
+        get_session_questions,
     )
 except ImportError:
     def init_db() -> None:
@@ -68,16 +75,34 @@ except ImportError:
     def get_next_difficulty(topic: str, mode: str) -> str:
         return "medium"
 
+    def get_mastery_overview(mode: str) -> list[dict]:
+        return []
+
     def add_qa(session_id, question, topic, mode, **kwargs) -> int:
         print(f"[STUB add_qa] session={session_id} topic={topic} mode={mode}")
         return -1
 
     def end_session_in_db(session_id, summary=None) -> None:
         print(f"[STUB end_session] session={session_id} summary={summary}")
+
+    def get_session(session_id):
+        return None
+
+    def get_session_questions(session_id):
+        return []
 # ---------------------------------------------------------------------------
 
 
 app = FastAPI(title="Viva - Part C: Agent Orchestration")
+
+# Allow a locally-running Streamlit frontend (different port) to call this
+# API directly from the browser. Wide open for hackathon/dev purposes only.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def _ensure_db_ready() -> None:
@@ -126,16 +151,28 @@ def submit_answer(req: SubmitAnswerRequest) -> SubmitAnswerResponse:
             ),
         )
 
-    try:
-        audio_bytes = base64.b64decode(req.audio_base64)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid base64 audio: {exc}")
+    # --- Part A: speech-to-text, OR a typed-answer bypass ---
+    # transcript_override lets a text-only frontend (or a real audio
+    # frontend that also offers a "type instead" fallback) skip transcribe()
+    # entirely — useful since real speech-to-text needs ffmpeg + a Whisper
+    # model that not every environment has installed.
+    if req.transcript_override is not None:
+        transcript = req.transcript_override
+    else:
+        if not req.audio_base64:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide either audio_base64 or transcript_override.",
+            )
+        try:
+            audio_bytes = base64.b64decode(req.audio_base64)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid base64 audio: {exc}")
 
-    # --- Part A: speech-to-text ---
-    try:
-        transcript = transcribe(audio_bytes)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"transcribe() failed: {exc}")
+        try:
+            transcript = transcribe(audio_bytes)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"transcribe() failed: {exc}")
 
     # --- Part C: evaluate (score is already normalized to 0.0-1.0) ---
     try:
@@ -193,6 +230,61 @@ def end_session(req: EndSessionRequest) -> EndSessionResponse:
     forget_backend_session(req.session_id)
 
     return EndSessionResponse(session_id=backend_session_id, ended=True)
+
+
+@app.get("/mastery/{mode}", response_model=list[MasteryTopic])
+def mastery_overview(mode: str) -> list[MasteryTopic]:
+    """
+    Every topic's current mastery for `mode`, weakest first — powers a
+    frontend dashboard (e.g. a bar chart) showing the full mastery picture,
+    not just the single weakest topic used internally for question
+    selection.
+    """
+    try:
+        overview = get_mastery_overview(mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not load mastery: {exc}")
+    return [MasteryTopic(**row) for row in overview]
+
+
+@app.get("/interview/session/{session_id}", response_model=SessionHistoryResponse)
+def session_history(session_id: str) -> SessionHistoryResponse:
+    """
+    Full history (summary + every Q&A) for a frontend session_id — powers
+    a "review this session" screen. Looks up the mapped Part B integer
+    session id the same way /submit-answer and /end-session do.
+    """
+    try:
+        backend_session_id = get_or_create_backend_session(session_id)
+        session = get_session(backend_session_id)
+        qa_rows = get_session_questions(backend_session_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not load session: {exc}")
+
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"No such session: {session_id}")
+
+    return SessionHistoryResponse(
+        session_id=backend_session_id,
+        started_at=str(session.get("started_at")) if session.get("started_at") else None,
+        ended_at=str(session.get("ended_at")) if session.get("ended_at") else None,
+        summary=session.get("summary"),
+        qa=[
+            SessionQAItem(
+                id=row["id"],
+                question=row["question"],
+                transcript=row.get("transcript"),
+                score=row.get("score"),
+                topic=row["topic"],
+                mode=row["mode"],
+                difficulty=row.get("difficulty"),
+                created_at=str(row["created_at"]),
+            )
+            for row in qa_rows
+        ],
+    )
 
 
 @app.get("/health")

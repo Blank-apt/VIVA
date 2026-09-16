@@ -1,169 +1,60 @@
-# Viva
+# Viva — Adaptive Interview & Viva Prep Coach
 
-**An adaptive, voice-based interview coach that learns what you don't know — and asks about it next.**
-
-Built for the AI Builders Hackathon 2026.
-
----
-
-## The problem
-
-Most interview prep tools are static question banks: they don't know what you actually got wrong, they're text-only when real interviews are spoken under pressure, and they never ask about the projects on your own resume. Viva is a mock interviewer that listens, grades what you actually said, and adapts in real time.
-
-## What it does
-
-Viva runs three interview modes over voice:
-
-- **Fundamentals** — closed-form CS questions with adaptive difficulty. Difficulty climbs or eases based on your running mastery score.
-- **Scenario** — open-ended system-design questions, each graded against its own checklist of specific, checkable criteria.
-- **Your Projects** — questions generated from your own resume/project docs via RAG, so no two candidates get the same session.
-
-Every spoken answer is transcribed live, scored by an LLM evaluator against a real rubric, and the score updates a per-topic mastery tracker that decides what to ask next — no human grading involved.
-
-## How it's built
-
-Three independently-developed backend modules, connected only by fixed function signatures — no shared internal state:
+Full stack: a FastAPI backend (three integrated parts) plus a Streamlit
+frontend for actually using it.
 
 ```
-┌──────────────────┐      ┌───────────────────────┐      ┌──────────────────┐
-│     Part A        │      │        Part C          │      │     Part B        │
-│   Voice & RAG      │ ───▶ │  Agent Orchestration    │ ───▶ │  Adaptive Scoring   │
-│                    │      │                         │      │                    │
-│ Whisper speech-    │      │ Interviewer + Evaluator │      │ SQLite mastery     │
-│ to-text. Resume/   │      │ agents. FastAPI routes. │      │ tracking. EMA      │
-│ project ingestion  │      │ Structured LLM scoring. │      │ difficulty math.   │
-│ and retrieval.     │      │                         │      │ Session state.     │
-└──────────────────┘      └───────────────────────┘      └──────────────────┘
+viva/
+  backend/    FastAPI app — Interviewer/Evaluator agents, SQLite persistence
+              (see backend/README.md for the full integration report)
+  frontend/   Streamlit UI — talks to the backend over HTTP
+              (see frontend/README.md for details)
 ```
 
-**Why the Evaluator is designed this way:** the LLM only ever makes coarse, checklist-style judgments (a boolean per criterion, never a numeric score) via strict JSON-schema structured output. The actual 0–1 score fed into mastery tracking is computed deterministically in Python from points earned vs. possible — LLMs are unreliable at fine-grained numeric scoring but reliably good at binary judgment calls, so the arithmetic never touches the model.
+## Fastest path to running it
 
-**LLM provider is swappable**, not hardcoded — Mistral, Groq, or Moonshot's Kimi behind one interface, switched with a single environment variable. Development runs on free tiers; the hackathon deployment can switch to a paid Kimi key without touching any code.
-
-## Tech stack
-
-| Layer | Technology |
-|---|---|
-| Backend framework | FastAPI |
-| Database | SQLite |
-| Speech-to-text | Whisper (`faster-whisper`) |
-| LLM providers | Mistral / Groq / Moonshot (Kimi) — OpenAI-compatible API |
-| Structured output | Strict JSON-schema grading (no free-text parsing) |
-| Retrieval | Sentence-transformers embeddings over resume/project docs |
-| Doc parsing | `pdfplumber`, `python-docx` |
-
-## Project structure
-
-```
-backend/
-├── part_a/              # Voice & RAG (Whisper, ingestion, retrieval)
-├── part_b/              # Adaptive scoring (SQLite, mastery, sessions)
-│   ├── schema.sql
-│   └── seed.py
-├── part_c/               # Agent orchestration (this is the FastAPI app)
-│   ├── main.py            # Routes
-│   ├── interviewer.py     # Question generation + selection
-│   ├── evaluator.py       # Answer grading
-│   ├── llm_client.py      # Provider-agnostic structured-output client
-│   ├── schemas.py         # Pydantic models
-│   ├── config.py          # Provider config, .env loading
-│   ├── _pathfix.py        # Makes part_a/part_b importable as siblings
-│   └── requirements.txt
-├── tests/
-│   └── test_integration.py
-└── requirements.txt
-```
-
-## Setup
-
-### 1. Clone and install
-
+**Terminal 1 — backend:**
 ```bash
-git clone https://github.com/Blank-apt/VIVA.git
-cd VIVA/backend
-python3 -m venv venv
-source venv/bin/activate      # Windows: venv\Scripts\activate
-pip install -r requirements.txt -r part_a/requirements.txt -r part_b/requirements.txt -r part_c/requirements.txt
-```
-
-Part A's speech-to-text also needs `ffmpeg` installed as a system tool:
-
-```bash
-sudo apt install ffmpeg        # Debian/Ubuntu
-brew install ffmpeg            # macOS
-```
-
-### 2. Configure your LLM provider
-
-```bash
+cd backend
+python -m venv venv && source venv/Scripts/activate   # Git Bash on Windows; use venv/bin/activate on Mac/Linux
+pip install -r requirements.txt --break-system-packages
+cp part_c/.env.example part_c/.env
+# edit part_c/.env: set LLM_PROVIDER + a matching API key (Mistral's free tier needs no card)
 cd part_c
-cp .env.example .env
-```
-
-Edit `.env` and set one provider block (uncomment/fill in exactly one):
-
-```bash
-LLM_PROVIDER=mistral
-MISTRAL_API_KEY=your_real_key_here
-```
-
-Mistral's free tier (console.mistral.ai) needs no credit card — just phone verification. Groq is a supported alternative with its own free tier. Moonshot (Kimi) is the intended provider for the live hackathon run once credits are purchased.
-
-### 3. Run
-
-```bash
 uvicorn main:app --reload
 ```
 
-The boot log confirms which provider and model loaded:
-
-```
-[config] provider=mistral model=mistral-large-latest MISTRAL_API_KEY loaded (starts with 'AbCdEf...', length 32)
-```
-
-Visit `http://127.0.0.1:8000/docs` for interactive API docs.
-
-## API
-
-| Endpoint | Method | Description |
-|---|---|---|
-| `/interview/next-question` | `POST` | Generates the next question for a given mode (and optional topic) |
-| `/interview/submit-answer` | `POST` | Submits spoken (base64) audio for a question, returns transcript + score |
-| `/interview/end-session` | `POST` | Closes out a session with a summary |
-| `/health` | `GET` | Health check |
-
-Example request to start a fundamentals question:
-
+**Terminal 2 — frontend:**
 ```bash
-curl -X POST http://127.0.0.1:8000/interview/next-question \
-  -H "Content-Type: application/json" \
-  -d '{"session_id": "demo-1", "mode": "fundamentals", "topic": null}'
+cd frontend
+pip install -r requirements.txt --break-system-packages
+streamlit run app.py
 ```
 
-## Testing
+Open the URL Streamlit prints (`http://localhost:8501`). Pick a mode,
+click **Get next question**, type an answer, click **Submit answer** —
+you'll see a real LLM-generated question and a real evaluator score, and
+watch the mastery bar chart on the right update.
+
+## Run the automated tests (no API key or frontend needed)
 
 ```bash
 cd backend
-python3 -m pytest tests/test_integration.py -v
+python -m pytest tests/ part_b/tests/ -v
 ```
+38 tests, covering the database layer, EMA mastery math, difficulty
+adaptation, session persistence/rollback, and the full FastAPI request
+flow (with the LLM call mocked so no network/API key is required).
 
-The integration test exercises the full loop — question generation, answer submission, mastery updates, and adaptive difficulty — against the real Part B SQLite implementation.
+## Why a text box instead of a microphone
 
-## Team
+Real speech-to-text (Part A) needs `ffmpeg` + `faster-whisper`, a heavy,
+platform-specific install. The Streamlit frontend's "Submit answer" button
+sends typed text straight to the evaluator via the backend's
+`transcript_override` field — functionally identical to a correct
+transcription of speaking the same words. Real audio can be wired in later
+by swapping that one field for a recorded/base64-encoded clip; nothing else
+in the flow would need to change.
 
-| Name | Role |
-|---|---|
-| Kshitij | Part C — Agent Orchestration |
-| Tejas Raghupati Sairam | Part A — Voice & RAG Ingestion |
-| Raghav Biyani | Part B — Adaptive Scoring |
-
-## Roadmap
-
-- Live streaming voice instead of record-then-upload
-- Per-topic progress dashboard across sessions
-- More modes (behavioral, take-home review)
-- Periodic calibration of Evaluator scores against human graders
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+For full architecture, API contracts, database design, and integration
+notes, see `backend/README.md`.

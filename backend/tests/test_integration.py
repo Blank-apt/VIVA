@@ -156,6 +156,90 @@ def test_full_interview_turn_updates_mastery_and_persists_qa(client):
     assert session_row["summary"] == "Practiced Binary Search"
 
 
+def test_submit_answer_with_transcript_override_skips_transcribe(client, monkeypatch):
+    """
+    A text-only frontend (no microphone/Whisper) should be able to submit
+    a typed answer via transcript_override and bypass transcribe() entirely.
+    """
+    # If transcribe() gets called at all here, something is wrong — the
+    # override should short-circuit it. Make it explode to prove that.
+    def boom(audio_bytes):
+        raise AssertionError("transcribe() should not be called when transcript_override is set")
+
+    monkeypatch.setattr(main, "transcribe", boom)
+
+    resp = client.post(
+        "/interview/next-question",
+        json={"session_id": "override-test", "mode": "fundamentals", "topic": "Arrays"},
+    )
+    question_id = resp.json()["question_id"]
+
+    resp = client.post(
+        "/interview/submit-answer",
+        json={
+            "session_id": "override-test",
+            "question_id": question_id,
+            "transcript_override": "Arrays give O(1) indexed access but O(n) insertion in the middle.",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["transcript"] == "Arrays give O(1) indexed access but O(n) insertion in the middle."
+
+
+def test_submit_answer_requires_audio_or_override(client):
+    resp = client.post(
+        "/interview/next-question",
+        json={"session_id": "no-answer-test", "mode": "fundamentals", "topic": "Queue"},
+    )
+    question_id = resp.json()["question_id"]
+
+    resp = client.post(
+        "/interview/submit-answer",
+        json={"session_id": "no-answer-test", "question_id": question_id},
+    )
+    assert resp.status_code == 400
+
+
+def test_mastery_overview_endpoint(client):
+    resp = client.get("/mastery/fundamentals")
+    assert resp.status_code == 200
+    topics = resp.json()
+    assert len(topics) == 55  # all seeded topics
+    scores = [t["score"] for t in topics]
+    assert scores == sorted(scores)  # weakest first
+    for t in topics:
+        assert t["difficulty"] in ("foundational", "medium", "edge_cases")
+
+
+def test_mastery_overview_rejects_invalid_mode(client):
+    resp = client.get("/mastery/not-a-real-mode")
+    assert resp.status_code == 400
+
+
+def test_session_history_endpoint(client):
+    session_id = "history-test-session"
+    resp = client.post(
+        "/interview/next-question",
+        json={"session_id": session_id, "mode": "fundamentals", "topic": "Stack"},
+    )
+    question_id = resp.json()["question_id"]
+    client.post(
+        "/interview/submit-answer",
+        json={
+            "session_id": session_id,
+            "question_id": question_id,
+            "transcript_override": "A stack is LIFO: push/pop from the same end.",
+        },
+    )
+
+    resp = client.get(f"/interview/session/{session_id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["qa"]) == 1
+    assert body["qa"][0]["topic"] == "Stack"
+    assert body["qa"][0]["transcript"] == "A stack is LIFO: push/pop from the same end."
+
+
 def test_submit_answer_without_prior_question_returns_404(client):
     resp = client.post(
         "/interview/submit-answer",

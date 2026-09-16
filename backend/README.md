@@ -35,7 +35,8 @@ cd backend/part_c
 uvicorn main:app --reload
 ```
 
-The database (`backend/viva.db`) and its 24 seeded topics are created
+The database (`backend/viva.db`) and its 55 seeded topics — spanning
+DSA, OS, DBMS, Networking, OOP, and System Design basics — are created
 automatically the first time the app is imported — no manual DB setup
 step required.
 
@@ -130,13 +131,32 @@ POST /interview/next-question
   -> { "question_id", "mode", "topic", "difficulty", "question_text", "checklist" }
 
 POST /interview/submit-answer
-  { "session_id": "s1", "question_id": "...", "audio_base64": "..." }
+  { "session_id": "s1", "question_id": "...", "audio_base64": "..." }         # real audio path
+  { "session_id": "s1", "question_id": "...", "transcript_override": "..." }  # typed-answer path (used by the Streamlit frontend)
   -> { "transcript", "evaluation": {"score", "points_earned", "points_possible", "rationale", "detail"}, "next_difficulty" }
 
 POST /interview/end-session
   { "session_id": "s1", "summary": "optional text" }
   -> { "session_id": <int>, "ended": true }
+
+GET /mastery/{mode}
+  -> [ { "topic": "...", "score": 0.0-1.0, "difficulty": "..." }, ... ]   # every topic, weakest first
+
+GET /interview/session/{session_id}
+  -> { "session_id": <int>, "started_at", "ended_at", "summary", "qa": [ {...}, ... ] }
 ```
+
+The last two (`GET /mastery/{mode}`, `GET /interview/session/{session_id}`)
+were added specifically to support the Streamlit frontend's mastery bar
+chart and session-history panel — they're thin read-only wrappers around
+Part B's `get_mastery_overview()` (new) and `get_session()`/
+`get_session_questions()` (already existed).
+
+`transcript_override` on `/submit-answer` was also added for the frontend:
+it skips `transcribe()` entirely and grades the given text directly, so the
+UI works with typed answers without requiring Part A's Whisper/ffmpeg
+install. `audio_base64` still works exactly as before for a real
+audio-based client — exactly one of the two fields is required.
 
 ## Database
 
@@ -191,25 +211,32 @@ with "don't over-engineer for a hackathon."
 ## Test results (actually run, not claimed)
 
 ```
-33 passed in ~1.2s
+40 passed in ~2s
 ```
-- 29 Part B unit tests (schema, EMA, boundaries, mode isolation, weakest-topic
-  ordering, session/transaction rollback, restart persistence, `add_qa`/`end_session`)
-- 4 integration tests through the real FastAPI app + real SQLite DB:
+- 31 Part B unit tests (schema, EMA, boundaries, mode isolation, weakest-topic
+  ordering, session/transaction rollback, restart persistence, `add_qa`/`end_session`,
+  seed coverage across all 6 topic categories)
+- 9 integration tests through the real FastAPI app + real SQLite DB:
   full next-question → submit-answer → mastery-update → persistence →
-  end-session flow; a 404 check for answering an unknown question; and a
-  repeated-low-score run that drives difficulty down to `foundational`.
+  end-session flow; a 404 check for answering an unknown question; a
+  repeated-low-score run that drives difficulty down to `foundational`;
+  the `transcript_override` typed-answer path; the `/mastery/{mode}` and
+  `/interview/session/{id}` read endpoints.
 
 Additionally manually verified (not part of the automated suite, but run
 and observed during this session):
 - The app boots correctly via real `uvicorn` (not just TestClient), auto-creates
-  and seeds `viva.db`, and responds on `/health`.
+  and seeds all 55 topics into `viva.db`, and responds on `/health`.
 - Mastery data (`get_weakest_topics`) survives killing and restarting the
   actual `uvicorn` OS process — the project's core "remembers the
   candidate" claim, confirmed at the process level, not just in-memory.
 - If Part A's ML dependencies (faster-whisper etc.) aren't installed, the
   app still boots and runs correctly using the stub `transcribe()` — verified
   by hiding the `part_a` package and re-importing `main.py`.
+- The real FastAPI server and the real Streamlit frontend were run
+  simultaneously as separate processes; both reported healthy, and a
+  scripted simulation of the full UI call sequence (question → answer →
+  mastery fetch → session history → end session) succeeded end to end.
 
 ## Known limitations
 
